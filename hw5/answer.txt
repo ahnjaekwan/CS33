@@ -1,0 +1,45 @@
+// #12.18 and #12.24
+
+#12.18
+Definition of safe trafectory and unsafe trajectory:
+Safe trajectory is a trajectory that skirts the unsafe region.
+Unsafe trajectory is a trajectory that touches any part of the unsafe region.
+
+(A) H2, L2, U2, H1, L1, S2, U1, S1, T1, T2
+Among the trajectory, (L1, S2) part touches and crosses the unsafe region.
+Thus, by definition, this trajectory is unsafe.
+
+(B) H2, H1, L1, U1, S1, L2, T1, U2, S2, T2
+All the trajectory skirts the unsafe region without touching and crossing into it.
+Thus, by definition, this trajectory is safe.
+
+(C) H1, L1, H2, L2, U2, S2, U1, S1, T1, T2
+Among the trajectory, (L2, U2, S2) part touches and crosses the unsafe region.
+Thus, by definition, this trajectory is unsafe.
+
+
+
+#12.24
+The function is thread-safe when function produces the complete and exact output while it is repeatedly called from the multiple concurrent threads.
+The function is reentrant when function accesses the variables that are not shared with anyone at the time of calling by the multiple threads.
+Consequently, the function is reentrant when the function satisfies both conditions: (1) it is thread-safe, and (2) it doesn't use global variables.
+
+The functions in the Rio I/O package are thread-safe.
+
+ssize_t rio_readn(int fd, void *usrbuf, size_t n);
+//this function is reentrant because it doesn't use global variables.
+
+ssize_t rio_writen(int fd, void *usrbuf, size_t n);
+//this function is reentrant because it doesn't use global variables.
+
+void rio_readinitb(rio_t *rp, int fd);
+//this function is not reentrant because it uses a global struct.
+
+static ssize_t rio_read(rio_t *rp, char *usrbuf, size_t maxlen);
+//this function is not reentrant because it returns to static.
+
+ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t n);
+//this function is not reentrant because it uses a global struct.
+
+ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n);
+//this function is not reentrant because it uses a global struct.
