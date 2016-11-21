@@ -1,0 +1,335 @@
+At the beginning, I opened up putty of linux server of 04. (jaekwan@lnxsrv04.seas.ucla.edu)
+
+I set up the path.
+: export PATH=/usr/local/cs/bin:$PATH
+And I checked whether I am using correct gcc.
+: which gcc
+Then it prints out "/usr/local/cs/bin/gcc" correctly.
+
+Next I downloaded the tarball file and unzipped it.
+: tar -zxvf sthttpd-2.27.0.tar.gz
+
+Then, I copied the patch text from the web and pasted it back into text file named
+'sthttpd-patch.txt' and saved it in current directory of '~/cs33F15/lab3'.
+And I applied the patch.
+: patch -p0 < sthttpd-patch.txt
+However, this patch actually generated the bug so that I will exploit later in this lab.
+
+Next, I moved into sthttpd-2.27.0 directory and configured it.
+: ./configure LDFLAGS="-Xlinker --rpath=/usr/local/cs/gcc-$(gcc -dumpversion)/lib"
+
+From now, I created the three files with using three different CFLAGS.
+: make clean
+: make CFLAGS='-g3 -O2 -fno-inline -fstack-protector-strong'
+: mv src/thttpd src/thttpd-sp
+
+Second,
+: make clean
+: make CFLAGS='-g3 -O2 -fno-inline -static-libasan -fsanitize=address'
+: mv src/thttpd src/thttpd-as
+
+Third,
+: make clean
+: make CFLAGS='-g3 -O2 -fno-inline -fno-stack-protector -zexecstack'
+: mv src/thttpd src/thttpd-no
+
+Then, I determined my own port of using my student ID: 604057669
+(12330 + 3 * (UID % 293) + Y) where Y would be (1=SP, 2=AS, 3=NO)
+SP: 12568
+AS: 12569
+NO: 12570
+These different port numbers are desinged for avoiding collides between students.
+
+Then for the SP version, I would run the command with options
+-p for the port number and -D for debugging (in the src folder)
+(the port number doesn't actually matter? We just don't want students
+to be colliding with other students...)
+
+: ./thttpd-sp -p 12568 -D
+The -p option specifies the port nmber and the -D is for debugging.
+Now I am running the server on lnxsrv04.
+
+At this point, I opened up another terminal of same sever(linux04) in order to check
+whether these files work properly.
+
+And I created a file called 'foo.txt' which has a random contents ("fooooo!")
+Then, I checked whether I got into the proper server and access to 'foo.txt' file by typing this:
+: curl http://localhost:12568/foo.txt
+Then it prints out "fooooo!" which verified.
+
+Made same steps for other two files.
+: ./thttpd-as -p 12569 -D
+: curl http://localhost:12569/foo.txt
+
+: ./thttpd-no -p 12570 -D
+: curl http://localhost:12570/foo.txt
+
+So far, I successfully set up the working environment.
+In this lab, I use two terminals at the same time: one is running server and the other
+is running gdb on thttpd.
+
+
+The bug that I patched makes the function fgets read up to 1000 characters while the buffer
+in the source code only takes 100 characters.
+So if it reads more than 100 characters, the code will break.
+
+I created a text file called 'break.txt' with more than 100 characters in it as a config file
+so that it indeed breaks instead of exits the program.
+It actually has contents ended up like "port=qq..qq" with 157 q's.
+I tested each of the SP,AS, and NO variants with this config file.
+
+: ./thttpd-sp -p 12568 -D -C break.txt
+: ./thttpd-as -p 12569 -D -C break.txt
+: ./thttpd-no -p 12570 -D -C break.txt
+
+All three files were successfully aborted.
+Then, I backtraced and found out why each variant crashed.
+
+I opened up the executables in gdb.
+: gdb --args thttpd-sp -p 12568 -D -C break.txt
+Then I set logging on in order to output to 'gdb.txt'
+(gdb) set logging on
+)gdb) r
+Then it crashed with output saying:
+
+Starting program: /w/home.04/ee/ugrad/jaekwan/cs33F15/lab3/sthttpd-2.27.0/src/thttpd-sp -p 12568 -D -C break.txt
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+*** stack smashing detected ***: /w/home.04/ee/ugrad/jaekwan/cs33F15/lab3/sthttpd-2.27.0/src/thttpd-sp terminated
+Program received signal SIGSEGV, Segmentation fault.
+0x00000033d8e0f867 in ?? () from /lib64/libgcc_s.so.1
+
+Backtraced it.
+(gdb) bt
+Then I have a backtrace of the crash for thttpd-sp.
+
+#0  0x00000033d8e0f867 in ?? () from /lib64/libgcc_s.so.1
+#1  0x00000033d8e10119 in _Unwind_Backtrace () from /lib64/libgcc_s.so.1
+#2  0x00000033d26fe9a6 in backtrace () from /lib64/libc.so.6
+#3  0x00000033d267054b in __libc_message () from /lib64/libc.so.6
+#4  0x00000033d27025d7 in __fortify_fail () from /lib64/libc.so.6
+#5  0x00000033d27025a0 in __stack_chk_fail () from /lib64/libc.so.6
+#6  0x000000000040433b in read_config (filename=<optimized out>)
+    at thttpd.c:1190
+#7  0x7171717171717171 in ?? ()
+#8  0x00007f0000717171 in ?? ()
+#9  0x00000005d26e45d6 in ?? ()
+#10 0x00007fffffffe6e2 in ?? ()
+#11 0x00007fffffffe6e2 in ?? ()
+#12 0x00007fffffffd260 in ?? ()
+#13 0x00007fffffffd1e0 in ?? ()
+#14 0x00007fffffffe400 in ?? ()
+#15 0x0000000000000000 in ?? ()
+    
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)
+
+Crash starts at the addresses of 0x7171717171717171 so I needed to check the instruction right before it.
+
+: gdb --args thttpd-sp -p 12568 -D -C break.txt
+(gdb) break read_config
+(gdb) set disassemble-next-line on
+(gdb) r
+(gdb) s
+
+The crash happened at line 1190 of read_config. So I stepped in until I reached there.
+The instruction which causes the crash was the following:
+
+0x000000000040428e <read_config+1214>:       48 8b 44 24 68  mov    0x68(%rsp),%rax
+0x0000000000404293 <read_config+1219>:       64 48 33 04 25 28 00 00 00     xor    %fs:0x28,%rax
+0x000000000040429c <read_config+1228>:       0f 85 94 00 00 00       jne    0x404336 <read_config+1382>
+0x00000000004042a2 <read_config+1234>:       48 83 c4 78     add    $0x78,%rsp
+0x00000000004042a6 <read_config+1238>:       5b      pop    %rbx
+0x00000000004042a7 <read_config+1239>:       5d      pop    %rbp
+0x00000000004042a8 <read_config+1240>:       41 5c   pop    %r12
+0x00000000004042aa <read_config+1242>:       41 5d   pop    %r13
+0x00000000004042ac <read_config+1244>:       c3      retq
+
+This instruction puts the value from the address of canary into %rax and then checks
+whether it has been changed with using xor.
+Because it was changed, the stack smashing happened, and thus the executable was forced to be terminated.
+
+This indicates that CFLAG 'stack-protector-strong' implements canary to protect from buffer overflow attacks.
+
+Then, I repeated the same process for thttpd-as as well.
+: gdb --args thttpd-as -p 12511 -D -C break.txt
+(gdb) set logging on
+(gdb) r
+Then it crashed as well.
+(gdb) bt
+
+SUMMARY: AddressSanitizer: stack-buffer-overflow ../../../../gcc-4.9.2/libsanitizer/asan/asan_interceptors.cc:417 __interceptor_strchr
+Shadow bytes around the buggy address:
+  0x10007fff79a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff79b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff79c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff79d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff79e0: 00 00 00 00 00 00 00 00 f1 f1 f1 f1 00 00 00 00
+=>0x10007fff79f0: 00 00 00 00 00 00 00 00[04]f4 f4 f4 f3 f3 f3 f3
+  0x10007fff7a00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff7a10: 00 00 00 00 f1 f1 f1 f1 04 f4 f4 f4 f2 f2 f2 f2
+  0x10007fff7a20: 04 f4 f4 f4 f2 f2 f2 f2 00 00 f4 f4 f2 f2 f2 f2
+  0x10007fff7a30: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x10007fff7a40: f2 f2 f2 f2 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Heap right redzone:      fb
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack partial redzone:   f4
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Contiguous container OOB:fc
+  ASan internal:           fe
+==5812==ABORTING
+
+
+A compare instruction was followed by a call to a reporting function which aborted the program.
+The instruction that caused the crash was the following:
+-- call	__asan_report_load4
+
+After it checked that a byte from the shadow memory was poisoned, it called the reporting function.
+Because a byte from shadow memory  was poisoned, it found buffer overflow, reported this error, and aborted the program in the end.
+Inside _asan_report_load4, it would call 'ud2' which generated SIGILL which in turn terminates, or core dumps the program.
+COnsequently, bytes from shadow memory indicate which areas of memory being poisoned. 
+
+Lastly, I repeated process again for thttpd-no.
+: gdb --args thttpd-no -p 12512 -D -C break.txt
+(gdb) set logging on
+(gdb) r
+Then it crashed with output saying:
+
+Starting program: /w/home.04/ee/ugrad/jaekwan/cs33F15/lab3/sthttpd-2.27.0/src/thttpd-no -p 12570 -D -C break.txt
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+Program received signal SIGSEGV, Segmentation fault.
+0x0000000000404128 in read_config (filename=<optimized out>) at thttpd.c:1190
+1190        }
+
+(gdb) bt
+#0  0x0000000000404128 in read_config (filename=<optimized out>)
+    at thttpd.c:1190
+    #1  0x7171717171717171 in ?? ()
+    #2  0x00007f0000717171 in ?? ()
+    #3  0x00000005d26e45d6 in ?? ()
+    #4  0x00007fffffffe6f4 in ?? ()
+    #5  0x00007fffffffe6f4 in ?? ()
+    #6  0x00007fffffffd270 in ?? ()
+    #7  0x00007fffffffd1f0 in ?? ()
+    #8  0x00007fffffffe410 in ?? ()
+    #9  0x0000000000000000 in ?? ()
+    
+
+In order to find which instruction caused the crash, I ran gdb.
+: gdb --args thttpd-no -p 12512 -D -C break.txt
+(gdb) break thttpd.c:1190
+(gdb) set disassemble-next-line on
+(gdb) r
+(gdb) s
+
+The instruction that caused the crash was:
+0x0000000000404128 <read_config+1208>:       c3      retq
+
+The program tried to return to the memory address at 0x7171717171717171.
+(It is from the 157 q's that I wrote with buffer overflow from my config file)
+The program crashed because accessing this memory produces an error.
+
+Then, I generated assembly language for variants.
+Start with SP.
+: make clean
+: make CFLAGS='-S -O2 -fno-inline -fstack-protector-strong'
+: mv src/thttpd.o src/thttpd-sp.s
+
+Secondly for AS.
+: make clean
+: make CFLAGS='-S -O2 -fno-inline -static-libasan -fsanitize=address'
+: mv src/thttpd.o src/thttpd-as.s
+
+Lasty for NO.
+: make clean
+: make CFLAGS='-S -O2 -fno-inline -fno-stack-protector -zexecstack'
+: mv src/thttpd.o src/thttpd-no.s
+
+By using emacs functions, I copied the handle_read functions from each of the
+assembly code files for SP, AS, and NO variants and then pasted into text files called
+'handleread-sp.txt', 'handleread-as.txt', and 'handleread-no.txt'.
+
+By using 'diff', I compared 'handleread-sp.txt' with 'handleread-no.txt' and saved the difference into 'diffBetSPandNO.txt'.
+: diff -u handleread-sp.txt handleread-no.txt > diffBetSPandNO.txt
+
+Two files were almost similar to each other. The only difference between the SP and NO
+variants was the jump instructions.(number is decreased by 10, That's it.)
+There was not a big difference between SP variant and NO variant because the
+'-fstack-protector-strong' flag option only produces canaries for functions that declare
+any type or length of local array, even in structs and unions. The handle_read function
+didn't trigger '-fstack-protector-strong' to create canaries, generating a similar
+assembly code with NO variants. Indeed, '-fstack-protector-strong' also protects functions
+that use local variable's address in function argument. Furthermores, functions which use
+local register variables are also being protected.
+
+Now, I compared SP with AS variant (don't need to do compare AS with NO because it's the same)
+
+The obvious difference is the usage of flag option '-fsanitize=address'.
+There were many checks for "shadow memory" and if anything was detected to be off,
+there were calls to a reporting function of 'call	__asan_report_load4'.
+As a result, it produces mcuh longer piece of assembly code. 
+Address Sanitizer is behaving like canaries but it covers much bigger range of memory.
+
+In order to build an exploit for bug in variant NO, I made a target.txt in the working directory of the server file at first.
+Then, my explit shoudl cause the victim web server that is invoke thttpd via GDB with -C configure file to remove target.txt.
+This configure file contains bytes that is translated intol machine instructions, just a string.
+
+Summary:
+I found where the return address is and returned the return address to code located
+at beginning of buffer. Then, smashed it and saved ebp. And insert machine instructions
+to delete target.txt. And buffer starts so make return address starts and program executed this.
+I figured out how to delete the code, create C code which deletes a file and looked at it's .c file.
+Now I can see how machin instructions look like.
+(In the process, I was careful with nx bit, and turned it off.)
+
+The followings are knowledge necessary before doing the exploit:
+//address of line[100]
+//machine is little endian
+//nx bit is enabled so need to disable nx bit
+
+
+Now, I built the exploit in gdb.
+: make clean
+: make CFLAGS='-g3 -O2 -fno-inline -fno-stack-protector -zexecstack'
+'-zexexstack' option is to disable nx bit.
+: mv src/thttpd src/thttpd-exploit
+
+Then called the remove function and pass it in with the argument of "target.txt\0".
+Since I wanted get the address of the existing libc function remove, I called it. 
+
+Finding addresses:
+: gdb --args thttpd-exploit -p 12570 -D -C target.txt
+(gdb) break read_config
+(gdb) r
+(gdb) s
+(gdb) print (int *)line
+
+I figure out that buffer had address of 0xffffc23c (3c c2 ff ff in little endian)
+Then, I placed the string for the file that I want to delete "target.txt\0" at
+an address of 0xffffc314 (which is much exceeding 100 characters)
+
+Then, I observed how C code deletes target in assembly.
+I inserted a remove ("target.txt") C line of code into the existing code and
+observed the assembly language.
+And I found that the two instructions of push and call: push the address of the
+"target.txt\0" onto the stack and then call the remove function. 
+
+In order to do this, I did similar process as above.
+(gdb) print remove
+
+Then I got the instructions to delete the file.
+'push' and 'call'
+
+Finally, I changed this into object code, put it into my config file.
+Then my target.txt was successfully removed.
